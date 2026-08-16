@@ -2,16 +2,19 @@ package com.cryptomarketpulse.service;
 
 import com.cryptomarketpulse.config.CoinbaseWebSocketProperties;
 import com.cryptomarketpulse.dto.CoinbaseMatchMessage;
+import com.cryptomarketpulse.dto.TradeEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
 import org.springframework.web.reactive.socket.client.WebSocketClient;
@@ -19,9 +22,10 @@ import reactor.core.publisher.Mono;
 
 @Slf4j
 @Component
+@Profile("ingestion")
 public class CoinbaseWebSocketIngestionService {
 
-    private final TradeService tradeService;
+    private final TradeEventProducer tradeEventProducer;
     private final CoinbaseWebSocketProperties properties;
     private final ObjectMapper objectMapper;
     private final WebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
@@ -34,10 +38,10 @@ public class CoinbaseWebSocketIngestionService {
     private volatile boolean running;
 
     public CoinbaseWebSocketIngestionService(
-            TradeService tradeService,
+            TradeEventProducer tradeEventProducer,
             CoinbaseWebSocketProperties properties,
             ObjectMapper objectMapper) {
-        this.tradeService = tradeService;
+        this.tradeEventProducer = tradeEventProducer;
         this.properties = properties;
         this.objectMapper = objectMapper;
     }
@@ -89,24 +93,25 @@ public class CoinbaseWebSocketIngestionService {
     }
 
     private void connectAndConsume() throws Exception {
-        URI uri = URI.create(properties.getUrl());
-        String subscribeMessage = objectMapper.writeValueAsString(Map.of(
+        URI uri = URI.create(Objects.requireNonNull(properties.getUrl()));
+        String subscribeMessage = Objects.requireNonNull(objectMapper.writeValueAsString(Map.of(
                 "type", "subscribe",
                 "product_ids", new String[] {properties.getSymbol()},
-                "channels", new String[] {"matches"}));
+                "channels", new String[] {"matches"})));
 
         log.info("Connecting Coinbase WebSocket: {}", properties.getUrl());
 
-        webSocketClient.execute(uri, session -> {
+        webSocketClient.execute(Objects.requireNonNull(uri), session -> {
+                    var subscriptionMessage = Objects.requireNonNull(session.textMessage(subscribeMessage));
                     Mono<Void> sendSubscription =
-                            session.send(Mono.just(session.textMessage(subscribeMessage)));
+                            session.send(Objects.requireNonNull(Mono.just(subscriptionMessage)));
 
                     Mono<Void> receiveMessages = session.receive()
                             .map(message -> message.getPayloadAsText())
                             .doOnNext(this::handleMessage)
                             .then();
 
-                    return sendSubscription.then(receiveMessages);
+                    return Objects.requireNonNull(sendSubscription.then(receiveMessages));
                 })
                 .block();
     }
@@ -135,7 +140,7 @@ public class CoinbaseWebSocketIngestionService {
             BigDecimal quantity = new BigDecimal(message.quantity());
             Instant tradeTime = Instant.parse(message.time());
 
-            tradeService.ingestTrade(symbol, price, quantity, tradeTime);
+            tradeEventProducer.publish(new TradeEvent(symbol, price, quantity, tradeTime, message.sequence()));
             long processed = processedTradeCount.incrementAndGet();
             if (processed <= 5 || processed % 100 == 0) {
                 log.info(

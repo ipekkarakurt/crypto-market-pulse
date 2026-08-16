@@ -9,11 +9,13 @@ import java.util.List;
 import java.util.Objects;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
+@Profile("processing")
 public class CandleService {
 
     private static final int MAX_OPTIMISTIC_RETRIES = 3;

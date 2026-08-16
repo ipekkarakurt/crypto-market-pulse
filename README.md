@@ -1,8 +1,10 @@
 # Crypto Market Pulse
 
-Kademe 4: Dockerized Spring Boot + PostgreSQL + Coinbase WebSocket candle processing.
+Kademe 5: Kafka ile ingestion ve processing servislerini ayırma.
 
-Bu aşamada sistem `docker compose up` ile tek komutta ayağa kalkar: `app` container'ı Coinbase `BTC-USD` stream'ini dinler, 1 dakikalık candle üretir ve PostgreSQL'e yazar.
+Bu aşamada akış:
+
+`Coinbase -> ingestion-service -> Kafka(topic: market-trades) -> processing-service -> PostgreSQL`
 
 ## Requirements
 
@@ -16,10 +18,11 @@ docker compose up
 
 Servisler:
 
-- App: `http://localhost:8080`
+- Processing API: `http://localhost:8080`
 - PostgreSQL: `localhost:5432`
+- Kafka broker: `localhost:9092`
 
-İlk çalıştırmada app image'ı `Dockerfile` ile build edilir. Sonraki çalıştırmalarda mevcut image kullanılır.
+İlk çalıştırmada service image'ı `Dockerfile` ile build edilir. Sonraki çalıştırmalarda mevcut image kullanılır.
 
 Durdurma:
 
@@ -33,23 +36,27 @@ Veriyi de silmek istersen:
 docker compose down -v
 ```
 
-## PostgreSQL setup (quick)
+## Kafka + servis rolleri
 
-```bash
-docker run --name crypto-pg \
-  -e POSTGRES_DB=crypto_market_pulse \
-  -e POSTGRES_USER=crypto_user \
-  -e POSTGRES_PASSWORD=crypto_password \
-  -p 5432:5432 -d postgres:16
-```
+- `ingestion-service` (profile: `ingestion`)
+  - Coinbase WebSocket dinler
+  - trade event'lerini Kafka `market-trades` topic'ine üretir (producer)
+  - DB bağlantısı yok
+- `processing-service` (profile: `processing`)
+  - Kafka `market-trades` topic'inden event tüketir (consumer)
+  - event'i candle'a dönüştürüp PostgreSQL'e yazar
+  - `GET /markets/BTC-USD/candles?interval=1m` endpoint'ini sunar
 
-## Run
+## Kafka kavramlarını projede nerede görüyoruz
 
-```bash
-mvn spring-boot:run
-```
-
-Docker yerine lokalde çalıştırmak istersen bu adımı kullan.
+- `producer`: `TradeEventProducer`
+- `consumer`: `TradeEventConsumer`
+- `topic`: `market-trades`
+- `partition`: consumer loglarında `partition` değeri
+- `offset`: consumer loglarında `offset` değeri
+- `consumer group`: `market-processing-service`
+- `serialization`: producer `JsonSerializer`, consumer `JsonDeserializer`
+- `async communication`: ingestion ve processing servisleri birbirinden bağımsız çalışır
 
 Varsayılan DB bağlantısı:
 
@@ -136,22 +143,34 @@ WebSocket'i geçici kapatmak için:
 COINBASE_WS_ENABLED=false mvn spring-boot:run
 ```
 
-Docker Compose içindeki app container bu environment variable'ları kullanır:
+Docker Compose içindeki servisler bu environment variable'ları kullanır:
 
-- `DB_URL=jdbc:postgresql://postgres:5432/crypto_market_pulse`
-- `DB_USERNAME=crypto_user`
-- `DB_PASSWORD=crypto_password`
-- `COINBASE_WS_ENABLED=true`
+- `KAFKA_BOOTSTRAP_SERVERS=kafka:9092`
+- `APP_KAFKA_MARKET_TRADES_TOPIC=market-trades`
+- processing için: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
 
 ## Docker yapısı (öğrenme notu)
 
 - `Dockerfile`: Spring Boot app image'ını üretir (multi-stage build).
-- `image`: app için `crypto-market-pulse-app:latest`, db için `postgres:16`.
-- `container`: `crypto-market-pulse-app` ve `crypto-market-pulse-postgres`.
+- `image`: app servisleri için `crypto-market-pulse-service:latest`, db için `postgres:16`, kafka için `bitnami/kafka:3.7`.
+- `container`: `crypto-market-pulse-ingestion`, `crypto-market-pulse-processing`, `crypto-market-pulse-postgres`, `crypto-market-pulse-kafka`.
 - `volume`: `pgdata` ile PostgreSQL verisi kalıcı tutulur.
-- `environment variables`: DB ve websocket ayarları compose içinden verilir.
+- `environment variables`: profile, Kafka, DB ve websocket ayarları compose içinden verilir.
 - `network`: `crypto-net` bridge ağı ile container'lar birbirini `postgres` hostname'i ile görür.
-- `port mapping`: app `8080:8080`, postgres `5432:5432`.
+- `port mapping`: processing `8080:8080`, postgres `5432:5432`, kafka `9092:9092`.
+
+## Dayanıklılık deneyi (zorunlu)
+
+1. Sistemi başlat:
+   - `docker compose up`
+2. Processing servisini kapat:
+   - `docker compose stop processing-service`
+3. Bir süre bekle (ingestion Kafka'ya yazmaya devam eder).
+4. Processing servisini tekrar aç:
+   - `docker compose start processing-service`
+5. Gözlemle:
+   - processing loglarında birikmiş eventlerin offset bazında işlendiğini gör
+   - candles endpoint'inde verinin güncellendiğini doğrula
 
 ## SQL öğrenme quick check
 
@@ -191,5 +210,6 @@ mvn test
 
 - [ ] App restart sonrası veri kaybolmuyor
 - [ ] `GET /markets/BTC-USD/candles?interval=1m` doğru candle döndürüyor
-- [ ] Uygulama 30-60 dakika kesintisiz trade topluyor
+- [ ] Processing durup açıldığında Kafka'daki birikmiş eventler işleniyor
+- [ ] Producer/consumer/topic/partition/offset/consumer group kavramlarını kendi cümlelerinle anlatabiliyorsun
 - [ ] `candles` tablosu ve index'i SQL ile doğrulandı
