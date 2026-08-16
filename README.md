@@ -1,6 +1,6 @@
 # Crypto Market Pulse
 
-Kademe 5: Kafka ile ingestion ve processing servislerini ayırma.
+Kademe 5.5: Kafka ile ayrılmış servisleri Maven modüllerine bölme.
 
 Bu aşamada akış:
 
@@ -22,7 +22,10 @@ Servisler:
 - PostgreSQL: `localhost:5432`
 - Kafka broker: `localhost:9092`
 
-İlk çalıştırmada service image'ı `Dockerfile` ile build edilir. Sonraki çalıştırmalarda mevcut image kullanılır.
+İlk çalıştırmada her servis kendi Dockerfile'ı ile build edilir:
+
+- `ingestion-service/Dockerfile`
+- `processing-service/Dockerfile`
 
 Durdurma:
 
@@ -38,11 +41,11 @@ docker compose down -v
 
 ## Kafka + servis rolleri
 
-- `ingestion-service` (profile: `ingestion`)
+- `ingestion-service` (ayrı Maven modülü)
   - Coinbase WebSocket dinler
   - trade event'lerini Kafka `market-trades` topic'ine üretir (producer)
   - DB bağlantısı yok
-- `processing-service` (profile: `processing`)
+- `processing-service` (ayrı Maven modülü)
   - Kafka `market-trades` topic'inden event tüketir (consumer)
   - event'i candle'a dönüştürüp PostgreSQL'e yazar
   - `GET /markets/BTC-USD/candles?interval=1m` endpoint'ini sunar
@@ -75,7 +78,7 @@ mvn spring-boot:run
 
 ## Migration (Flyway)
 
-`src/main/resources/db/migration/V1__create_trades_table.sql`
+`processing-service/src/main/resources/db/migration/V1__create_trades_table.sql`
 
 - `trades` tablosunu oluşturur
 - `idx_trades_symbol_trade_time_desc` index'ini ekler
@@ -149,13 +152,19 @@ Docker Compose içindeki servisler bu environment variable'ları kullanır:
 - `APP_KAFKA_MARKET_TRADES_TOPIC=market-trades`
 - processing için: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
 
+## Multi-module yapı
+
+- `shared-model`: servisler arası paylaşılan DTO/event modelleri (`TradeEvent`)
+- `ingestion-service`: Coinbase WebSocket -> Kafka producer
+- `processing-service`: Kafka consumer -> Candle aggregation -> PostgreSQL + REST API
+
 ## Docker yapısı (öğrenme notu)
 
-- `Dockerfile`: Spring Boot app image'ını üretir (multi-stage build).
-- `image`: app servisleri için `crypto-market-pulse-service:latest`, db için `postgres:16`, kafka için `bitnami/kafka:3.7`.
+- `ingestion-service/Dockerfile` ve `processing-service/Dockerfile`: ayrı app image'ları üretir (multi-stage build).
+- `image`: app servisleri için `crypto-market-pulse-ingestion:latest` ve `crypto-market-pulse-processing:latest`; DB için `postgres:16`; Kafka için `confluentinc/cp-kafka:7.6.1`.
 - `container`: `crypto-market-pulse-ingestion`, `crypto-market-pulse-processing`, `crypto-market-pulse-postgres`, `crypto-market-pulse-kafka`.
 - `volume`: `pgdata` ile PostgreSQL verisi kalıcı tutulur.
-- `environment variables`: profile, Kafka, DB ve websocket ayarları compose içinden verilir.
+- `environment variables`: Kafka, DB ve websocket ayarları compose içinden verilir.
 - `network`: `crypto-net` bridge ağı ile container'lar birbirini `postgres` hostname'i ile görür.
 - `port mapping`: processing `8080:8080`, postgres `5432:5432`, kafka `9092:9092`.
 
@@ -195,15 +204,13 @@ LIMIT 20;
 
 ## Transaction notları
 
-- `TradeService#ingestTrade` -> `@Transactional`
-- `CandleService#findRecent` -> `@Transactional(readOnly = true)`
 - `Candle` entity'sindeki `@Version` alanı optimistic locking guard'ı sağlar.
 - `CandleService#aggregateTrade` optimistic lock çatışmalarında kısa backoff ile otomatik retry uygular (max 3 deneme).
 
 ## Tests
 
 ```bash
-mvn test
+mvn clean test
 ```
 
 ## Bitirme kriteri kontrol listesi
