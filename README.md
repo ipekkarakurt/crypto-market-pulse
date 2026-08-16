@@ -1,8 +1,8 @@
 # Crypto Market Pulse
 
-Kademe 1: Spring Boot + PostgreSQL + JPA/Hibernate + Flyway.
+Kademe 2: Spring Boot + PostgreSQL + Coinbase WebSocket ingestion.
 
-Bu aşamada trade verisi memory yerine PostgreSQL'de tutulur; uygulama restart olsa bile veri kaybolmaz.
+Bu aşamada uygulama `BTC-USD` için Coinbase'ten gerçek trade stream'ini dinler ve gelen trade'leri PostgreSQL'e yazar.
 
 ## Requirements
 
@@ -62,41 +62,57 @@ Flyway startup sırasında migration'ları otomatik çalıştırır.
 
 ## API
 
-### Create trade
+### Live market trades endpoint (Kademe 2)
 
-`POST /trades`
+`GET /markets/BTC-USD/trades`
 
-```json
-{
-  "symbol": "BTC-USD",
-  "price": 60000,
-  "quantity": 0.15
-}
-```
+Opsiyonel limit:
 
-Response (`201 Created`):
+`GET /markets/BTC-USD/trades?limit=100`
+
+Not: Kademe 2'de sadece `BTC-USD` desteklenir.
+
+Response örneği:
 
 ```json
-{
-  "id": 1,
-  "symbol": "BTC-USD",
-  "price": 60000,
-  "quantity": 0.15,
-  "tradeTime": "2026-08-16T16:05:00.123Z"
-}
+[
+  {
+    "id": 248829,
+    "symbol": "BTC-USD",
+    "price": 63210.11,
+    "quantity": 0.0021,
+    "tradeTime": "2026-08-16T18:05:00.123Z"
+  }
+]
 ```
 
-### List trades by symbol
-
-`GET /trades?symbol=BTC-USD`
-
-### List trades by symbol with limit
-
-`GET /trades?symbol=BTC-USD&limit=100`
-
-- `limit` default: `50`
+- `limit` default: `100`
 - allowed range: `1..1000`
 - newest first (`tradeTime DESC`)
+
+## Coinbase WebSocket ingestion
+
+Uygulama startup'ta Coinbase WebSocket'e subscribe olur:
+
+- URL: `wss://ws-feed.exchange.coinbase.com`
+- channel: `matches`
+- product: `BTC-USD`
+- reconnect delay: `5s`
+
+Config:
+
+```properties
+coinbase.ws.enabled=true
+coinbase.ws.url=wss://ws-feed.exchange.coinbase.com
+coinbase.ws.symbol=BTC-USD
+coinbase.ws.reconnect-delay=5s
+```
+
+WebSocket'i geçici kapatmak için:
+
+```bash
+COINBASE_WS_ENABLED=false mvn spring-boot:run
+```
 
 ## SQL öğrenme quick check
 
@@ -121,7 +137,7 @@ LIMIT 20;
 
 ## Transaction notları
 
-- `TradeService#create` -> `@Transactional`
+- `TradeService#ingestTrade` -> `@Transactional`
 - `TradeService#findRecent` / `findById` -> `@Transactional(readOnly = true)`
 
 ## Tests
@@ -133,6 +149,7 @@ mvn test
 ## Bitirme kriteri kontrol listesi
 
 - [ ] App restart sonrası veri kaybolmuyor
-- [ ] `GET /trades?symbol=BTC-USD` çalışıyor
-- [ ] `GET /trades?symbol=BTC-USD&limit=100` çalışıyor
+- [ ] `GET /markets/BTC-USD/trades` gerçek veriyi döndürüyor
+- [ ] `GET /markets/BTC-USD/trades?limit=100` çalışıyor
+- [ ] Uygulama 30-60 dakika kesintisiz trade topluyor
 - [ ] `trades` tablosu ve index'i SQL ile doğrulandı

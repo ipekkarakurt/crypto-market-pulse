@@ -7,7 +7,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.cryptomarketpulse.dto.CreateTradeRequest;
 import com.cryptomarketpulse.exception.TradeNotFoundException;
 import com.cryptomarketpulse.model.Trade;
 import com.cryptomarketpulse.repository.TradeRepository;
@@ -33,18 +32,23 @@ class TradeServiceTest {
     private TradeService tradeService;
 
     @Test
-    void createNormalizesSymbolAndPersists() {
-        CreateTradeRequest request = request("btc-usd", "60000", "0.15");
+    void ingestTradeNormalizesSymbolAndPersists() {
+        Instant tradeTime = Instant.parse("2026-08-16T16:05:00Z");
         when(tradeRepository.save(any())).thenAnswer(invocation -> {
             Trade saved = invocation.getArgument(0, Trade.class);
             return new Trade(1L, saved.getSymbol(), saved.getPrice(), saved.getQuantity(), saved.getTradeTime());
         });
 
-        Trade created = tradeService.create(request);
+        Trade created = tradeService.ingestTrade(
+                "btc-usd",
+                new BigDecimal("60000"),
+                new BigDecimal("0.15"),
+                tradeTime);
 
         ArgumentCaptor<Trade> tradeCaptor = ArgumentCaptor.forClass(Trade.class);
         verify(tradeRepository).save(tradeCaptor.capture());
         assertThat(tradeCaptor.getValue().getSymbol()).isEqualTo("BTC-USD");
+        assertThat(tradeCaptor.getValue().getTradeTime()).isEqualTo(tradeTime);
         assertThat(created.getId()).isEqualTo(1L);
     }
 
@@ -70,11 +74,4 @@ class TradeServiceTest {
                 .hasMessage("Trade not found with id: 99");
     }
 
-    private CreateTradeRequest request(String symbol, String price, String quantity) {
-        CreateTradeRequest req = new CreateTradeRequest();
-        req.setSymbol(symbol);
-        req.setPrice(new BigDecimal(price));
-        req.setQuantity(new BigDecimal(quantity));
-        return req;
-    }
 }

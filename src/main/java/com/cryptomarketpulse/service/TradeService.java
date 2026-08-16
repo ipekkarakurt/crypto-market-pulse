@@ -1,9 +1,9 @@
 package com.cryptomarketpulse.service;
 
-import com.cryptomarketpulse.dto.CreateTradeRequest;
 import com.cryptomarketpulse.exception.TradeNotFoundException;
 import com.cryptomarketpulse.model.Trade;
 import com.cryptomarketpulse.repository.TradeRepository;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -20,16 +20,6 @@ public class TradeService {
         this.tradeRepository = tradeRepository;
     }
 
-    @Transactional
-    public Trade create(CreateTradeRequest request) {
-        Trade trade = new Trade(
-                normalize(request.getSymbol()),
-                request.getPrice(),
-                request.getQuantity(),
-                Instant.now());
-        return tradeRepository.save(trade);
-    }
-
     @Transactional(readOnly = true)
     public List<Trade> findRecent(String symbol, int limit) {
         String normalized = normalize(symbol);
@@ -42,6 +32,12 @@ public class TradeService {
     @Transactional(readOnly = true)
     public Trade findById(Long id) {
         return tradeRepository.findById(id).orElseThrow(() -> new TradeNotFoundException(id));
+    }
+
+    @Transactional
+    public Trade ingestTrade(String symbol, BigDecimal price, BigDecimal quantity, Instant tradeTime) {
+        Trade trade = new Trade(normalize(symbol), price, quantity, tradeTime);
+        return tradeRepository.save(trade);
     }
 
     /** Locale.ROOT keeps "i" from becoming "İ" on Turkish-locale machines. */
