@@ -2,9 +2,9 @@ package com.cryptomarketpulse.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.cryptomarketpulse.exception.TradeNotFoundException;
@@ -28,16 +28,15 @@ class TradeServiceTest {
     @Mock
     private TradeRepository tradeRepository;
 
+    @Mock
+    private CandleService candleService;
+
     @InjectMocks
     private TradeService tradeService;
 
     @Test
-    void ingestTradeNormalizesSymbolAndPersists() {
+    void ingestTradeNormalizesSymbolAndAggregatesWithoutPersisting() {
         Instant tradeTime = Instant.parse("2026-08-16T16:05:00Z");
-        when(tradeRepository.save(any())).thenAnswer(invocation -> {
-            Trade saved = invocation.getArgument(0, Trade.class);
-            return new Trade(1L, saved.getSymbol(), saved.getPrice(), saved.getQuantity(), saved.getTradeTime());
-        });
 
         Trade created = tradeService.ingestTrade(
                 "btc-usd",
@@ -46,10 +45,12 @@ class TradeServiceTest {
                 tradeTime);
 
         ArgumentCaptor<Trade> tradeCaptor = ArgumentCaptor.forClass(Trade.class);
-        verify(tradeRepository).save(tradeCaptor.capture());
+        verify(candleService).aggregateTrade(tradeCaptor.capture());
         assertThat(tradeCaptor.getValue().getSymbol()).isEqualTo("BTC-USD");
         assertThat(tradeCaptor.getValue().getTradeTime()).isEqualTo(tradeTime);
-        assertThat(created.getId()).isEqualTo(1L);
+        assertThat(created.getSymbol()).isEqualTo("BTC-USD");
+        assertThat(created.getTradeTime()).isEqualTo(tradeTime);
+        verifyNoInteractions(tradeRepository);
     }
 
     @Test

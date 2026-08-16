@@ -1,8 +1,8 @@
 # Crypto Market Pulse
 
-Kademe 2: Spring Boot + PostgreSQL + Coinbase WebSocket ingestion.
+Kademe 3: Spring Boot + PostgreSQL + Coinbase WebSocket candle processing.
 
-Bu aşamada uygulama `BTC-USD` için Coinbase'ten gerçek trade stream'ini dinler ve gelen trade'leri PostgreSQL'e yazar.
+Bu aşamada uygulama `BTC-USD` için Coinbase'ten gerçek trade stream'ini dinler ve gelen trade'lerden 1 dakikalık candle üretip PostgreSQL'e yazar.
 
 ## Requirements
 
@@ -62,33 +62,30 @@ Flyway startup sırasında migration'ları otomatik çalıştırır.
 
 ## API
 
-### Live market trades endpoint (Kademe 2)
+### 1 minute candles (Kademe 3)
 
-`GET /markets/BTC-USD/trades`
+`GET /markets/BTC-USD/candles?interval=1m`
 
 Opsiyonel limit:
 
-`GET /markets/BTC-USD/trades?limit=100`
-
-Not: Kademe 2'de sadece `BTC-USD` desteklenir.
+`GET /markets/BTC-USD/candles?interval=1m&limit=100`
 
 Response örneği:
 
 ```json
 [
   {
-    "id": 248829,
     "symbol": "BTC-USD",
-    "price": 63210.11,
-    "quantity": 0.0021,
-    "tradeTime": "2026-08-16T18:05:00.123Z"
+    "start": "2026-08-16T18:30:00Z",
+    "open": 60010,
+    "high": 60120,
+    "low": 59980,
+    "close": 60090,
+    "volume": 12.53,
+    "tradeCount": 714
   }
 ]
 ```
-
-- `limit` default: `100`
-- allowed range: `1..1000`
-- newest first (`tradeTime DESC`)
 
 ## Coinbase WebSocket ingestion
 
@@ -117,10 +114,10 @@ COINBASE_WS_ENABLED=false mvn spring-boot:run
 ## SQL öğrenme quick check
 
 ```sql
-SELECT id, symbol, price, quantity, trade_time
-FROM trades
+SELECT symbol, start_time, open, high, low, close, volume, trade_count
+FROM candles
 WHERE symbol = 'BTC-USD'
-ORDER BY trade_time DESC
+ORDER BY start_time DESC
 LIMIT 20;
 ```
 
@@ -128,17 +125,18 @@ Query plan görmek için:
 
 ```sql
 EXPLAIN ANALYZE
-SELECT id, symbol, price, quantity, trade_time
-FROM trades
+SELECT symbol, start_time, open, high, low, close, volume, trade_count
+FROM candles
 WHERE symbol = 'BTC-USD'
-ORDER BY trade_time DESC
+ORDER BY start_time DESC
 LIMIT 20;
 ```
 
 ## Transaction notları
 
 - `TradeService#ingestTrade` -> `@Transactional`
-- `TradeService#findRecent` / `findById` -> `@Transactional(readOnly = true)`
+- `CandleService#aggregateTrade` -> `@Transactional`
+- `CandleService#findRecent` -> `@Transactional(readOnly = true)`
 
 ## Tests
 
@@ -149,7 +147,6 @@ mvn test
 ## Bitirme kriteri kontrol listesi
 
 - [ ] App restart sonrası veri kaybolmuyor
-- [ ] `GET /markets/BTC-USD/trades` gerçek veriyi döndürüyor
-- [ ] `GET /markets/BTC-USD/trades?limit=100` çalışıyor
+- [ ] `GET /markets/BTC-USD/candles?interval=1m` doğru candle döndürüyor
 - [ ] Uygulama 30-60 dakika kesintisiz trade topluyor
-- [ ] `trades` tablosu ve index'i SQL ile doğrulandı
+- [ ] `candles` tablosu ve index'i SQL ile doğrulandı

@@ -1,7 +1,7 @@
 package com.cryptomarketpulse.controller;
 
-import com.cryptomarketpulse.dto.TradeResponse;
-import com.cryptomarketpulse.service.TradeService;
+import com.cryptomarketpulse.dto.CandleResponse;
+import com.cryptomarketpulse.service.CandleService;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
@@ -18,18 +18,20 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/markets")
 public class MarketController {
 
-    private final TradeService tradeService;
+    private final CandleService candleService;
 
-    public MarketController(TradeService tradeService) {
-        this.tradeService = tradeService;
+    public MarketController(CandleService candleService) {
+        this.candleService = candleService;
     }
 
-    @GetMapping("/{symbol}/trades")
-    public List<TradeResponse> getTrades(
+    @GetMapping("/{symbol}/candles")
+    public List<CandleResponse> getCandles(
             @PathVariable
                     @Pattern(regexp = "^BTC-USD$", message = "only BTC-USD is supported at this stage")
                     String symbol,
+            @RequestParam @Pattern(regexp = "^1m$", message = "only 1m interval is supported")
+                    String interval,
             @RequestParam(defaultValue = "100") @Min(1) @Max(1000) int limit) {
-        return tradeService.findRecent(symbol, limit).stream().map(TradeResponse::from).toList();
+        return candleService.findRecent(symbol, limit).stream().map(CandleResponse::from).toList();
     }
 }
