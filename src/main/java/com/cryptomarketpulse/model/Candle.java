@@ -6,6 +6,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.time.Instant;
 import lombok.AccessLevel;
@@ -45,6 +46,10 @@ public class Candle {
 
     @Column(name = "trade_count", nullable = false)
     private long tradeCount;
+
+    @Version
+    @Column(nullable = false)
+    private long version;
 
     public Candle(
             String symbol,

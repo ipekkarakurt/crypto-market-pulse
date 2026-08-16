@@ -1,8 +1,8 @@
 package com.cryptomarketpulse.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import com.cryptomarketpulse.model.Candle;
@@ -11,21 +11,18 @@ import com.cryptomarketpulse.repository.CandleRepository;
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 @ExtendWith(MockitoExtension.class)
 class CandleServiceTest {
@@ -33,56 +30,102 @@ class CandleServiceTest {
     @Mock
     private CandleRepository candleRepository;
 
+    @Mock
+    private PlatformTransactionManager transactionManager;
+
     @InjectMocks
     private CandleService candleService;
 
-    private final ExecutorService pool = Executors.newFixedThreadPool(8);
+    @Test
+    @SuppressWarnings("null")
+    void createsNewCandle() throws Exception {
+        Instant tradeTime = Instant.parse("2026-08-16T18:30:12Z");
+        Instant windowStart = Instant.parse("2026-08-16T18:30:00Z");
+        mockTxManager();
 
-    @AfterEach
-    void tearDown() {
-        pool.shutdownNow();
+        when(candleRepository.findBySymbolAndStartTime("BTC-USD", windowStart)).thenReturn(Optional.empty());
+        when(candleRepository.saveAndFlush(any(Candle.class))).thenAnswer(invocation -> {
+            Candle candle = Objects.requireNonNull(invocation.getArgument(0, Candle.class));
+            setId(candle, 1L);
+            return candle;
+        });
+
+        Candle saved = candleService.aggregateTrade(new Trade(
+                "BTC-USD",
+                new BigDecimal("60010"),
+                new BigDecimal("0.20"),
+                tradeTime));
+
+        assertThat(saved.getOpen()).isEqualByComparingTo("60010");
+        assertThat(saved.getHigh()).isEqualByComparingTo("60010");
+        assertThat(saved.getLow()).isEqualByComparingTo("60010");
+        assertThat(saved.getClose()).isEqualByComparingTo("60010");
+        assertThat(saved.getVolume()).isEqualByComparingTo("0.20");
+        assertThat(saved.getTradeCount()).isEqualTo(1);
     }
 
     @Test
     @SuppressWarnings("null")
-    void aggregatesConcurrentTradesInSameOneMinuteWindow() throws Exception {
-        Instant minute = Instant.parse("2026-08-16T18:30:12Z");
-        AtomicReference<Candle> store = new AtomicReference<>();
+    void retriesOnOptimisticLockAndThenUpdates() throws Exception {
+        Instant tradeTime = Instant.parse("2026-08-16T18:30:18Z");
+        Instant windowStart = Instant.parse("2026-08-16T18:30:00Z");
+        mockTxManager();
+        AtomicInteger fetchCount = new AtomicInteger();
 
-        when(candleRepository.findBySymbolAndStartTime(eq("BTC-USD"), eq(minute.truncatedTo(java.time.temporal.ChronoUnit.MINUTES))))
-                .thenAnswer(invocation -> Optional.ofNullable(store.get()));
-
-        when(candleRepository.save(any(Candle.class))).thenAnswer(invocation -> {
-            Candle candle = Objects.requireNonNull(invocation.getArgument(0, Candle.class));
-            if (candle.getId() == null) {
-                setId(candle, 1L);
-            }
-            store.set(candle);
-            return candle;
+        when(candleRepository.findBySymbolAndStartTime("BTC-USD", windowStart)).thenAnswer(invocation -> {
+            Candle existing = new Candle(
+                    "BTC-USD",
+                    windowStart,
+                    new BigDecimal("60010"),
+                    new BigDecimal("60020"),
+                    new BigDecimal("60000"),
+                    new BigDecimal("60015"),
+                    new BigDecimal("0.50"),
+                    4);
+            setId(existing, 1L);
+            fetchCount.incrementAndGet();
+            return Optional.of(existing);
         });
+        when(candleRepository.saveAndFlush(any(Candle.class)))
+                .thenThrow(new ObjectOptimisticLockingFailureException(Candle.class, 1L))
+                .thenAnswer(invocation -> invocation.getArgument(0, Candle.class));
 
-        List<Callable<Void>> tasks = new ArrayList<>();
-        for (int i = 0; i < 50; i++) {
-            final int idx = i;
-            tasks.add(() -> {
-                BigDecimal price = new BigDecimal(60000 + idx);
-                candleService.aggregateTrade(new Trade("BTC-USD", price, new BigDecimal("0.10"), minute.plusSeconds(idx % 20)));
-                return null;
-            });
-        }
+        Candle saved = candleService.aggregateTrade(new Trade(
+                "BTC-USD",
+                new BigDecimal("60030"),
+                new BigDecimal("0.10"),
+                tradeTime));
 
-        List<Future<Void>> futures = pool.invokeAll(tasks);
-        for (Future<Void> future : futures) {
-            future.get();
-        }
+        assertThat(fetchCount.get()).isEqualTo(2);
+        assertThat(saved.getOpen()).isEqualByComparingTo("60010");
+        assertThat(saved.getHigh()).isEqualByComparingTo("60030");
+        assertThat(saved.getLow()).isEqualByComparingTo("60000");
+        assertThat(saved.getClose()).isEqualByComparingTo("60030");
+        assertThat(saved.getVolume()).isEqualByComparingTo("0.60");
+        assertThat(saved.getTradeCount()).isEqualTo(5);
+    }
 
-        Candle candle = store.get();
-        assertThat(candle).isNotNull();
-        assertThat(candle.getTradeCount()).isEqualTo(50);
-        assertThat(candle.getOpen()).isBetween(new BigDecimal("60000"), new BigDecimal("60049"));
-        assertThat(candle.getHigh()).isEqualByComparingTo("60049");
-        assertThat(candle.getLow()).isEqualByComparingTo("60000");
-        assertThat(candle.getVolume()).isEqualByComparingTo("5.00");
+    @Test
+    @SuppressWarnings("null")
+    void failsAfterMaxOptimisticRetries() throws Exception {
+        Instant tradeTime = Instant.parse("2026-08-16T18:31:10Z");
+        Instant windowStart = Instant.parse("2026-08-16T18:31:00Z");
+        mockTxManager();
+
+        when(candleRepository.findBySymbolAndStartTime("BTC-USD", windowStart)).thenReturn(Optional.empty());
+        when(candleRepository.saveAndFlush(any(Candle.class)))
+                .thenThrow(new ObjectOptimisticLockingFailureException(Candle.class, 1L));
+
+        assertThatThrownBy(() -> candleService.aggregateTrade(new Trade(
+                        "BTC-USD",
+                        new BigDecimal("60100"),
+                        new BigDecimal("0.10"),
+                        tradeTime)))
+                .isInstanceOf(ObjectOptimisticLockingFailureException.class);
+    }
+
+    private void mockTxManager() {
+        when(transactionManager.getTransaction(any(TransactionDefinition.class))).thenReturn(new SimpleTransactionStatus());
     }
 
     private void setId(Candle candle, Long id) throws Exception {

@@ -135,8 +135,9 @@ LIMIT 20;
 ## Transaction notları
 
 - `TradeService#ingestTrade` -> `@Transactional`
-- `CandleService#aggregateTrade` -> `@Transactional`
 - `CandleService#findRecent` -> `@Transactional(readOnly = true)`
+- `Candle` entity'sindeki `@Version` alanı optimistic locking guard'ı sağlar.
+- `CandleService#aggregateTrade` optimistic lock çatışmalarında kısa backoff ile otomatik retry uygular (max 3 deneme).
 
 ## Tests
 
