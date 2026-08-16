@@ -1,11 +1,24 @@
 # Crypto Market Pulse
 
-Real-time crypto market data backend. Stage 0: in-memory trade REST API.
+Kademe 1: Spring Boot + PostgreSQL + JPA/Hibernate + Flyway.
+
+Bu aşamada trade verisi memory yerine PostgreSQL'de tutulur; uygulama restart olsa bile veri kaybolmaz.
 
 ## Requirements
 
 - Java 17+
 - Maven 3.9+
+- PostgreSQL 14+
+
+## PostgreSQL setup (quick)
+
+```bash
+docker run --name crypto-pg \
+  -e POSTGRES_DB=crypto_market_pulse \
+  -e POSTGRES_USER=crypto_user \
+  -e POSTGRES_PASSWORD=crypto_password \
+  -p 5432:5432 -d postgres:16
+```
 
 ## Run
 
@@ -13,7 +26,39 @@ Real-time crypto market data backend. Stage 0: in-memory trade REST API.
 mvn spring-boot:run
 ```
 
-Server starts on `http://localhost:8080`.
+Varsayılan DB bağlantısı:
+
+- URL: `jdbc:postgresql://localhost:5432/crypto_market_pulse`
+- username: `crypto_user`
+- password: `crypto_password`
+
+İstersen environment variable ile override edebilirsin:
+
+```bash
+DB_URL=jdbc:postgresql://localhost:5432/crypto_market_pulse \
+DB_USERNAME=crypto_user \
+DB_PASSWORD=crypto_password \
+mvn spring-boot:run
+```
+
+## Migration (Flyway)
+
+`src/main/resources/db/migration/V1__create_trades_table.sql`
+
+- `trades` tablosunu oluşturur
+- `idx_trades_symbol_trade_time_desc` index'ini ekler
+
+Flyway startup sırasında migration'ları otomatik çalıştırır.
+
+## Entity
+
+`Trade`
+
+- `id`
+- `symbol`
+- `price`
+- `quantity`
+- `tradeTime`
 
 ## API
 
@@ -29,9 +74,7 @@ Server starts on `http://localhost:8080`.
 }
 ```
 
-Allowed symbols: `BTC-USD`, `ETH-USD`, `SOL-USD` (case-insensitive; stored uppercase).
-
-Response `201 Created` with `Location: /trades/{id}`:
+Response (`201 Created`):
 
 ```json
 {
@@ -39,52 +82,47 @@ Response `201 Created` with `Location: /trades/{id}`:
   "symbol": "BTC-USD",
   "price": 60000,
   "quantity": 0.15,
-  "timestamp": "2026-08-16T16:05:00.123Z"
+  "tradeTime": "2026-08-16T16:05:00.123Z"
 }
 ```
 
-### List recent trades
+### List trades by symbol
 
-`GET /trades`
+`GET /trades?symbol=BTC-USD`
 
-Query parameters:
+### List trades by symbol with limit
 
-| Param | Required | Default | Notes |
-|-------|----------|---------|-------|
-| `symbol` | no | all symbols | e.g. `BTC-USD` |
-| `limit` | no | `50` | min `1`, max `1000` |
+`GET /trades?symbol=BTC-USD&limit=100`
 
-Example: `GET /trades?symbol=BTC-USD&limit=50`
+- `limit` default: `50`
+- allowed range: `1..1000`
+- newest first (`tradeTime DESC`)
 
-Results are newest-first (highest id first).
+## SQL öğrenme quick check
 
-### Get trade by id
-
-`GET /trades/{id}`
-
-Returns `404` when the trade does not exist.
-
-### Error response
-
-```json
-{
-  "timestamp": "2026-08-16T16:05:00.123Z",
-  "status": 400,
-  "error": "Validation failed",
-  "fields": {
-    "symbol": "must be BTC-USD, ETH-USD, or SOL-USD"
-  }
-}
+```sql
+SELECT id, symbol, price, quantity, trade_time
+FROM trades
+WHERE symbol = 'BTC-USD'
+ORDER BY trade_time DESC
+LIMIT 20;
 ```
 
-`fields` is omitted when the error is not field-level (e.g. 404, malformed JSON).
+Query plan görmek için:
 
-## Postman quick test
+```sql
+EXPLAIN ANALYZE
+SELECT id, symbol, price, quantity, trade_time
+FROM trades
+WHERE symbol = 'BTC-USD'
+ORDER BY trade_time DESC
+LIMIT 20;
+```
 
-1. `POST http://localhost:8080/trades` with JSON body above — expect `201` and `Location`
-2. `GET http://localhost:8080/trades`
-3. `GET http://localhost:8080/trades?symbol=BTC-USD&limit=10`
-4. `GET http://localhost:8080/trades/1`
+## Transaction notları
+
+- `TradeService#create` -> `@Transactional`
+- `TradeService#findRecent` / `findById` -> `@Transactional(readOnly = true)`
 
 ## Tests
 
@@ -92,22 +130,9 @@ Returns `404` when the trade does not exist.
 mvn test
 ```
 
-## Project layout
+## Bitirme kriteri kontrol listesi
 
-```
-src/main/java/com/cryptomarketpulse/
-├── CryptoMarketPulseApplication.java
-├── controller/TradeController.java
-├── service/TradeService.java
-├── repository/
-│   ├── TradeRepository.java
-│   └── InMemoryTradeRepository.java
-├── model/Trade.java
-├── dto/
-│   ├── CreateTradeRequest.java
-│   └── TradeResponse.java
-└── exception/
-    ├── ErrorResponse.java
-    ├── TradeNotFoundException.java
-    └── GlobalExceptionHandler.java
-```
+- [ ] App restart sonrası veri kaybolmuyor
+- [ ] `GET /trades?symbol=BTC-USD` çalışıyor
+- [ ] `GET /trades?symbol=BTC-USD&limit=100` çalışıyor
+- [ ] `trades` tablosu ve index'i SQL ile doğrulandı

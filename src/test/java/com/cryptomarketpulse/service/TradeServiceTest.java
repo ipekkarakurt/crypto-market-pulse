@@ -2,66 +2,69 @@ package com.cryptomarketpulse.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.cryptomarketpulse.dto.CreateTradeRequest;
 import com.cryptomarketpulse.exception.TradeNotFoundException;
 import com.cryptomarketpulse.model.Trade;
-import com.cryptomarketpulse.repository.InMemoryTradeRepository;
+import com.cryptomarketpulse.repository.TradeRepository;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
-import org.junit.jupiter.api.BeforeEach;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageRequest;
 
+@ExtendWith(MockitoExtension.class)
 class TradeServiceTest {
 
+    @Mock
+    private TradeRepository tradeRepository;
+
+    @InjectMocks
     private TradeService tradeService;
 
-    @BeforeEach
-    void setUp() {
-        tradeService = new TradeService(new InMemoryTradeRepository());
+    @Test
+    void createNormalizesSymbolAndPersists() {
+        CreateTradeRequest request = request("btc-usd", "60000", "0.15");
+        when(tradeRepository.save(any())).thenAnswer(invocation -> {
+            Trade saved = invocation.getArgument(0, Trade.class);
+            return new Trade(1L, saved.getSymbol(), saved.getPrice(), saved.getQuantity(), saved.getTradeTime());
+        });
+
+        Trade created = tradeService.create(request);
+
+        ArgumentCaptor<Trade> tradeCaptor = ArgumentCaptor.forClass(Trade.class);
+        verify(tradeRepository).save(tradeCaptor.capture());
+        assertThat(tradeCaptor.getValue().getSymbol()).isEqualTo("BTC-USD");
+        assertThat(created.getId()).isEqualTo(1L);
     }
 
     @Test
-    void createAssignsIncrementalIds() {
-        Trade first = tradeService.create(request("BTC-USD", "60000", "0.15"));
-        Trade second = tradeService.create(request("ETH-USD", "3000", "1"));
+    void findRecentNormalizesSymbolAndUsesLimit() {
+        Trade trade = new Trade(3L, "BTC-USD", new BigDecimal("10"), new BigDecimal("1"), Instant.now());
+        when(tradeRepository.findBySymbolOrderByTradeTimeDesc("BTC-USD", PageRequest.of(0, 100)))
+                .thenReturn(List.of(trade));
 
-        assertThat(first.getId()).isEqualTo(1L);
-        assertThat(second.getId()).isEqualTo(2L);
-    }
-
-    @Test
-    void findRecentReturnsNewestFirst() {
-        tradeService.create(request("BTC-USD", "1", "1"));
-        tradeService.create(request("BTC-USD", "2", "1"));
-
-        List<Trade> recent = tradeService.findRecent(null, 50);
-
-        assertThat(recent).extracting(Trade::getId).containsExactly(2L, 1L);
-    }
-
-    @Test
-    void createNormalizesSymbolToUpperCase() {
-        Trade trade = tradeService.create(request("btc-usd", "60000", "0.15"));
-
-        assertThat(trade.getSymbol()).isEqualTo("BTC-USD");
-    }
-
-    @Test
-    void findRecentFiltersByNormalizedSymbolAndAppliesLimit() {
-        tradeService.create(request("BTC-USD", "1", "1"));
-        tradeService.create(request("ETH-USD", "2", "1"));
-        tradeService.create(request("BTC-USD", "3", "1"));
-
-        List<Trade> recent = tradeService.findRecent("btc-usd", 1);
+        List<Trade> recent = tradeService.findRecent("btc-usd", 100);
 
         assertThat(recent).hasSize(1);
         assertThat(recent.get(0).getSymbol()).isEqualTo("BTC-USD");
-        assertThat(recent.get(0).getId()).isEqualTo(3L);
+        verify(tradeRepository).findBySymbolOrderByTradeTimeDesc(eq("BTC-USD"), eq(PageRequest.of(0, 100)));
     }
 
     @Test
     void findByIdThrowsWhenMissing() {
+        when(tradeRepository.findById(99L)).thenReturn(Optional.empty());
+
         assertThatThrownBy(() -> tradeService.findById(99L))
                 .isInstanceOf(TradeNotFoundException.class)
                 .hasMessage("Trade not found with id: 99");

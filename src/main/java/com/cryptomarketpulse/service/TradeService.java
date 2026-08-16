@@ -7,7 +7,9 @@ import com.cryptomarketpulse.repository.TradeRepository;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class TradeService {
@@ -18,9 +20,9 @@ public class TradeService {
         this.tradeRepository = tradeRepository;
     }
 
+    @Transactional
     public Trade create(CreateTradeRequest request) {
         Trade trade = new Trade(
-                null,
                 normalize(request.getSymbol()),
                 request.getPrice(),
                 request.getQuantity(),
@@ -28,10 +30,16 @@ public class TradeService {
         return tradeRepository.save(trade);
     }
 
+    @Transactional(readOnly = true)
     public List<Trade> findRecent(String symbol, int limit) {
-        return tradeRepository.findRecent(normalize(symbol), limit);
+        String normalized = normalize(symbol);
+        if (normalized == null) {
+            return tradeRepository.findAllByOrderByTradeTimeDesc(PageRequest.of(0, limit));
+        }
+        return tradeRepository.findBySymbolOrderByTradeTimeDesc(normalized, PageRequest.of(0, limit));
     }
 
+    @Transactional(readOnly = true)
     public Trade findById(Long id) {
         return tradeRepository.findById(id).orElseThrow(() -> new TradeNotFoundException(id));
     }

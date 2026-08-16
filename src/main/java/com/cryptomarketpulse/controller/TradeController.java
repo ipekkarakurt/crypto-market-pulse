@@ -38,7 +38,7 @@ public class TradeController {
 
     @GetMapping
     public List<TradeResponse> findRecent(
-            @RequestParam(required = false) String symbol,
+            @RequestParam String symbol,
             @RequestParam(defaultValue = "50") @Min(1) @Max(1000) int limit) {
         return tradeService.findRecent(symbol, limit).stream()
                 .map(TradeResponse::from)
