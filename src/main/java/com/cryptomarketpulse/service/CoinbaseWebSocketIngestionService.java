@@ -12,7 +12,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
 import org.springframework.web.reactive.socket.client.WebSocketClient;
@@ -29,6 +28,8 @@ public class CoinbaseWebSocketIngestionService {
     private final ExecutorService executorService =
             Executors.newSingleThreadExecutor(r -> new Thread(r, "coinbase-ws-ingestion"));
     private final AtomicLong lastSequence = new AtomicLong(-1L);
+    private final AtomicLong wsMessageCount = new AtomicLong(0L);
+    private final AtomicLong processedTradeCount = new AtomicLong(0L);
 
     private volatile boolean running;
 
@@ -96,10 +97,7 @@ public class CoinbaseWebSocketIngestionService {
 
         log.info("Connecting Coinbase WebSocket: {}", properties.getUrl());
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.add("Sec-WebSocket-Extensions", "permessage-deflate");
-
-        webSocketClient.execute(uri, headers, session -> {
+        webSocketClient.execute(uri, session -> {
                     Mono<Void> sendSubscription =
                             session.send(Mono.just(session.textMessage(subscribeMessage)));
 
@@ -115,8 +113,12 @@ public class CoinbaseWebSocketIngestionService {
 
     private void handleMessage(String payload) {
         try {
+            long messageCount = wsMessageCount.incrementAndGet();
             CoinbaseMatchMessage message = objectMapper.readValue(payload, CoinbaseMatchMessage.class);
             if (!"match".equals(message.type())) {
+                if (messageCount <= 5) {
+                    log.info("Ignoring websocket message type='{}'", message.type());
+                }
                 return;
             }
 
@@ -134,8 +136,21 @@ public class CoinbaseWebSocketIngestionService {
             Instant tradeTime = Instant.parse(message.time());
 
             tradeService.ingestTrade(symbol, price, quantity, tradeTime);
+            long processed = processedTradeCount.incrementAndGet();
+            if (processed <= 5 || processed % 100 == 0) {
+                log.info(
+                        "Processed trade #{} symbol={} price={} quantity={} tradeTime={}",
+                        processed,
+                        symbol,
+                        price,
+                        quantity,
+                        tradeTime);
+            }
         } catch (Exception ex) {
-            log.debug("Skipping unparsable websocket message: {}", ex.getMessage());
+            log.warn(
+                    "Failed to process websocket message. reason={} payload={}",
+                    ex.getMessage(),
+                    shorten(payload));
         }
     }
 
@@ -192,5 +207,13 @@ public class CoinbaseWebSocketIngestionService {
         long jitter = ThreadLocalRandom.current().nextLong(-jitterRange, jitterRange + 1);
         long withJitter = exponential + jitter;
         return Math.max(base, Math.min(max, withJitter));
+    }
+
+    private String shorten(String payload) {
+        int maxLength = 280;
+        if (payload == null || payload.length() <= maxLength) {
+            return payload;
+        }
+        return payload.substring(0, maxLength) + "...";
     }
 }

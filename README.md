@@ -1,14 +1,37 @@
 # Crypto Market Pulse
 
-Kademe 3: Spring Boot + PostgreSQL + Coinbase WebSocket candle processing.
+Kademe 4: Dockerized Spring Boot + PostgreSQL + Coinbase WebSocket candle processing.
 
-Bu aşamada uygulama `BTC-USD` için Coinbase'ten gerçek trade stream'ini dinler ve gelen trade'lerden 1 dakikalık candle üretip PostgreSQL'e yazar.
+Bu aşamada sistem `docker compose up` ile tek komutta ayağa kalkar: `app` container'ı Coinbase `BTC-USD` stream'ini dinler, 1 dakikalık candle üretir ve PostgreSQL'e yazar.
 
 ## Requirements
 
-- Java 17+
-- Maven 3.9+
-- PostgreSQL 14+
+- Docker Desktop (veya Docker Engine + Compose plugin)
+
+## Quick start (tek komut)
+
+```bash
+docker compose up
+```
+
+Servisler:
+
+- App: `http://localhost:8080`
+- PostgreSQL: `localhost:5432`
+
+İlk çalıştırmada app image'ı `Dockerfile` ile build edilir. Sonraki çalıştırmalarda mevcut image kullanılır.
+
+Durdurma:
+
+```bash
+docker compose down
+```
+
+Veriyi de silmek istersen:
+
+```bash
+docker compose down -v
+```
 
 ## PostgreSQL setup (quick)
 
@@ -25,6 +48,8 @@ docker run --name crypto-pg \
 ```bash
 mvn spring-boot:run
 ```
+
+Docker yerine lokalde çalıştırmak istersen bu adımı kullan.
 
 Varsayılan DB bağlantısı:
 
@@ -110,6 +135,23 @@ WebSocket'i geçici kapatmak için:
 ```bash
 COINBASE_WS_ENABLED=false mvn spring-boot:run
 ```
+
+Docker Compose içindeki app container bu environment variable'ları kullanır:
+
+- `DB_URL=jdbc:postgresql://postgres:5432/crypto_market_pulse`
+- `DB_USERNAME=crypto_user`
+- `DB_PASSWORD=crypto_password`
+- `COINBASE_WS_ENABLED=true`
+
+## Docker yapısı (öğrenme notu)
+
+- `Dockerfile`: Spring Boot app image'ını üretir (multi-stage build).
+- `image`: app için `crypto-market-pulse-app:latest`, db için `postgres:16`.
+- `container`: `crypto-market-pulse-app` ve `crypto-market-pulse-postgres`.
+- `volume`: `pgdata` ile PostgreSQL verisi kalıcı tutulur.
+- `environment variables`: DB ve websocket ayarları compose içinden verilir.
+- `network`: `crypto-net` bridge ağı ile container'lar birbirini `postgres` hostname'i ile görür.
+- `port mapping`: app `8080:8080`, postgres `5432:5432`.
 
 ## SQL öğrenme quick check
 
